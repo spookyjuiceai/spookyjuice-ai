@@ -1,0 +1,315 @@
+name: SpookyJuice AI Production CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+  schedule:
+    # Daily health checks at 2 AM UTC
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Deployment Environment'
+        required: true
+        default: 'staging'
+        type: choice
+        options:
+        - staging
+        - production
+
+jobs:
+  # STAGE 1: CODE QUALITY & SECURITY
+  code-quality:
+    name: Code Quality & Security Scan
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+      
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+        
+    - name: Install dependencies
+      run: |
+        pip install bandit safety pylint black mypy
+        
+    - name: Security scan with Bandit
+      run: |
+        bandit -r src/ -f json -o bandit-report.json || true
+        
+    - name: Vulnerability check with Safety
+      run: |
+        safety check --json -o safety-report.json || true
+        
+    - name: Linting with Pylint
+      run: |
+        pylint src/ --output-format=json:pylint-report.json || true
+        
+    - name: Type checking with Mypy
+      run: |
+        mypy src/ --no-error-summary --no-site-packages || true
+        
+    - name: Code formatting with Black
+      run: |
+        black --check src/ || true
+        
+    - name: Upload security reports
+      uses: actions/upload-artifact@v3
+      with:
+        name: security-reports
+        path: |
+          bandit-report.json
+          safety-report.json
+          pylint-report.json
+
+  # STAGE 2: UNIT TESTS
+  unit-tests:
+    name: Unit Testing
+    runs-on: ubuntu-latest
+    needs: code-quality
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+      
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+        
+    - name: Install dependencies
+      run: |
+        pip install -r requirements.txt
+        pip install pytest pytest-cov pytest-mock pytest-asyncio
+        
+    - name: Run unit tests
+      run: |
+        python -m pytest tests/unit/ -v --cov=src --cov-report=xml --cov-report=html
+        
+    - name: Upload coverage reports
+      uses: actions/upload-artifact@v3
+      with:
+        name: coverage-reports
+        path: |
+          coverage.xml
+          htmlcov/
+          
+    - name: Upload test results
+      if: always()
+      uses: actions/upload-artifact@v3
+      with:
+        name: test-results
+        path: test-results/
+
+  # STAGE 3: INTEGRATION TESTS
+  integration-tests:
+    name: Integration Testing
+    runs-on: ubuntu-latest
+    needs: unit-tests
+    
+    env:
+      TEST_ELEVENLABS_API_KEY: ${{ secrets.TEST_ELEVENLABS_API_KEY }}
+      TEST_OPENAI_API_KEY: ${{ secrets.TEST_OPENAI_API_KEY }}
+      TEST_TWILIO_ACCOUNT_SID: ${{ secrets.TEST_TWILIO_ACCOUNT_SID }}
+      TEST_TWILIO_AUTH_TOKEN: ${{ secrets.TEST_TWILIO_AUTH_TOKEN }}
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+      
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+        
+    - name: Install dependencies
+      run: |
+        pip install -r requirements.txt
+        pip install pytest-docker-compose pytest-testcontainers
+        
+    - name: Start test services
+      run: |
+        docker-compose -f docker-compose.test.yml up -d
+        sleep 10  # Wait for services to start
+        
+    - name: Run integration tests
+      run: |
+        python -m pytest tests/integration/ -v --tb=short
+        
+    - name: Stop test services
+      if: always()
+      run: |
+        docker-compose -f docker-compose.test.yml down
+
+  # STAGE 4: E2E TESTS
+  e2e-tests:
+    name: End-to-End Testing
+    runs-on: ubuntu-latest
+    needs: integration-tests
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+      
+    - name: Deploy test environment
+      run: |
+        ./scripts/deploy-test-environment.sh
+        
+    - name: Run E2E tests
+      run: |
+        python -m pytest tests/e2e/ -v --html=e2e-report.html
+        
+    - name: Upload E2E test report
+      uses: actions/upload-artifact@v3
+      with:
+        name: e2e-test-report
+        path: e2e-report.html
+
+  # STAGE 5: PERFORMANCE TESTS
+  performance-tests:
+    name: Performance & Load Testing
+    runs-on: ubuntu-latest
+    needs: e2e-tests
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+      
+    - name: Run load tests
+      run: |
+        locust -f tests/performance/locustfile.py --headless -u 100 -r 10 -t 5m --html=performance-report.html
+        
+    - name: Upload performance report
+      uses: actions/upload-artifact@v3
+      with:
+        name: performance-report
+        path: performance-report.html
+
+  # STAGE 6: DEPLOYMENT
+  deploy-staging:
+    name: Deploy to Staging
+    runs-on: ubuntu-latest
+    needs: performance-tests
+    if: github.event_name == 'push' && github.ref == 'refs/heads/develop'
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+      
+    - name: Deploy to staging
+      run: |
+        ./scripts/deploy-staging.sh
+        
+    - name: Run post-deployment tests
+      run: |
+        ./scripts/health-check.sh --environment staging
+        
+    - name: Notify success
+      if: success()
+      run: |
+        ./scripts/notify-slack.sh "✅ Staging deployment successful"
+
+  deploy-production:
+    name: Deploy to Production
+    runs-on: ubuntu-latest
+    needs: deploy-staging
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+      
+    - name: Approve production deployment
+      uses: trstringer/manual-approval@v1
+      with:
+        secret: ${{ github.TOKEN }}
+        approvers: gorzelic
+        minimum-approvals: 1
+        
+    - name: Deploy to production
+      run: |
+        ./scripts/deploy-production.sh
+        
+    - name: Run production health checks
+      run: |
+        ./scripts/health-check.sh --environment production --detailed
+        
+    - name: Create GitHub release
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: v${{ github.run_number }}
+        name: Release v${{ github.run_number }}
+        body: |
+          Automated production deployment
+          - Build: ${{ github.run_number }}
+          - Commit: ${{ github.sha }}
+          - Date: ${{ github.event.head_commit.timestamp }}
+          
+    - name: Notify success
+      if: success()
+      run: |
+        ./scripts/notify-slack.sh "🚀 Production deployment successful!"
+
+  # STAGE 7: MONITORING
+  monitoring:
+    name: Post-Deployment Monitoring
+    runs-on: ubuntu-latest
+    needs: deploy-production
+    if: always()
+    
+    steps:
+    - name: Monitor for 5 minutes
+      run: |
+        ./scripts/monitor-deployment.sh --duration 300
+        
+    - name: Upload monitoring logs
+      uses: actions/upload-artifact@v3
+      with:
+        name: monitoring-logs
+        path: monitoring/
+
+  # STAGE 8: ROLLBACK (if needed)
+  rollback:
+    name: Emergency Rollback
+    runs-on: ubuntu-latest
+    needs: monitoring
+    if: failure() && needs.monitoring.result == 'failure'
+    
+    steps:
+    - name: Trigger rollback
+      run: |
+        ./scripts/rollback.sh --to-previous-version
+        
+    - name: Notify rollback
+      run: |
+        ./scripts/notify-slack.sh "🚨 EMERGENCY ROLLBACK TRIGGERED"
+
+# DAILY HEALTH CHECKS
+health-check:
+  name: Daily Health Check
+  runs-on: ubuntu-latest
+  if: github.event_name == 'schedule'
+  
+  steps:
+  - name: Check staging environment
+    run: |
+      ./scripts/health-check.sh --environment staging
+      
+  - name: Check production environment
+    run: |
+      ./scripts/health-check.sh --environment production
+      
+  - name: Generate health report
+    run: |
+      ./scripts/generate-health-report.sh > health-report-$(date +%Y%m%d).json
+      
+  - name: Upload health report
+    uses: actions/upload-artifact@v3
+    with:
+      name: health-reports
+      path: health-report-*.json
