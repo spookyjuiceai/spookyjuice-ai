@@ -1,0 +1,47 @@
+{
+  "voice_profile": {
+    "name": "SpookyJuice AI Professional",
+    "voice_id": "O91ChHz6qxVDOmtvlMKZ",
+    "recommended_model": "eleven_multilingual_v2",
+    "settings": {
+      "stability": 0.15,
+      "similarity_boost": 0.98,
+      "style": 0.45,
+      "use_speaker_boost": true
+    },
+    "advanced_settings": {
+      "output_format": "mp3_44100_192",
+      "apply_text_normalization": "auto",
+      "pronunciation_dictionary_enabled": true
+    },
+    "performance": {
+      "quality": "Maximum fidelity",
+      "speed": "2.2 seconds (acceptable for premium)",
+      "realism": "Professional human-like"
+    }
+  },
+  "speed_profile": {
+    "name": "SpookyJuice AI Fast",
+    "voice_id": "O91ChHz6qxVDOmtvlMKZ", 
+    "model": "eleven_flash_v2_5",
+    "settings": {
+      "stability": 0.25,
+      "similarity_boost": 0.90
+    },
+    "advanced_settings": {
+      "optimize_streaming_latency": 4,
+      "output_format": "mp3_22050_64"
+    },
+    "performance": {
+      "quality": "High quality",
+      "speed": "0.6 seconds (ultra fast)",
+      "realism": "Very good for real-time"
+    }
+  },
+  "optimization_notes": {
+    "similarity_boost": "0.98 = Maximum fidelity to your voice",
+    "stability": "0.15 = More natural variation",
+    "style": "0.45 = Enhanced personality expression",
+    "speaker_boost": "true = Professional audio enhancement"
+  }
+}
